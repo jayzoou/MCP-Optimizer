@@ -120,8 +120,21 @@ export class LighthouseMcpServer {
 
   // 新增：暴露一个直接调用 MCP 工具的接口
   async runAuditViaTool(params: { url: string; categories?: string[]; formFactor?: 'mobile' | 'desktop' }) {
-    // @ts-ignore
-    return await this.server.invokeTool("lighthouse_run_audit", params);
+    // Some versions of the MCP SDK don't expose an `invokeTool` helper.
+    // Call the internal runner directly and return a shape similar to the
+    // tool's output so HTTP callers can use `result.summary` / `result.lhr`.
+    const record = await this.runAudit(params);
+    const perf = record.lhr?.categories?.performance?.score ?? null;
+    const accessibility = record.lhr?.categories?.accessibility?.score ?? null;
+    const summary = {
+      reportId: record.id,
+      url: record.url,
+      fetchedAt: record.fetchedAt,
+      performance: perf !== null ? Math.round(perf * 100) : undefined,
+      accessibility: accessibility !== null ? Math.round(accessibility * 100) : undefined
+    };
+    // return record plus a `summary` to match existing HTTP handler expectations
+    return { ...record, summary };
   }
 
   async connect(transport: Transport): Promise<void> {
@@ -176,7 +189,7 @@ export async function startMcpServer(): Promise<void> {
             fix = await autoFixFromReport({ lhr: result.lhr, report: JSON.stringify(result.report) });
           }
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ summary: result.summary, fix, error: result.error }));
+          res.end(JSON.stringify({ summary: result.summary, fix, error: (result as any).error }));
         } catch (err: any) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: String(err) }));
