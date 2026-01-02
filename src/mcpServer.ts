@@ -3,7 +3,6 @@ import { z } from "zod";
 import { runLighthouseAudit } from "./runner/lighthouseRunner";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as http from 'http';
-import { runLighthouseAudit } from './runner/lighthouseRunner';
 import { autoFixFromReport } from './fix/fixer';
 
 export class LighthouseMcpServer {
