@@ -2,7 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runLighthouseAudit } from "./runner/lighthouseRunner";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import * as http from 'http';
+import { IncomingMessage, ServerResponse } from 'http';
 import { autoFixFromReport } from './fix/fixer';
 
 export class LighthouseMcpServer {
@@ -130,50 +132,74 @@ export class LighthouseMcpServer {
 export default LighthouseMcpServer;
 
 export async function startMcpServer(): Promise<void> {
+  // Run HTTP/SSE server
   const port = Number(process.env.PORT || process.env.AUDIT_PORT || 5000);
   const mcp = new LighthouseMcpServer();
-  const requestHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
-    if (req.method === 'POST' && req.url === '/audit') {
-      let body = '';
-      for await (const chunk of req) {
-        body += chunk;
-      }
-      const parsed = JSON.parse(body || '{}');
-      const url = parsed.url as string | undefined;
-      if (!url) {
-        res.writeHead(400);
-        res.end('missing url');
+  let sseTransport: SSEServerTransport | null = null;
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      if (req.method === 'GET' && req.url === '/sse') {
+        // SSE handshake: create transport and connect
+        sseTransport = new SSEServerTransport('/messages', res as unknown as ServerResponse<IncomingMessage>);
+        await mcp.connect(sseTransport);
         return;
       }
-      try {
-        // 通过 MCP 工具统一处理
-        const result = await mcp.runAuditViaTool({
-          url,
-          categories: parsed.categories,
-          formFactor: parsed.formFactor,
-        });
-        // 可选：自动修复
-        let fix = null;
-        if (result && result.lhr) {
-          fix = await autoFixFromReport({ lhr: result.lhr, report: JSON.stringify(result.report) });
+
+      if (req.method === 'POST' && req.url === '/messages') {
+        if (!sseTransport) {
+          // @ts-ignore
+          res.writeHead(400);
+          res.end();
+          return;
         }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ summary: result.summary, fix, error: result.error }));
-      } catch (err: any) {
-        res.writeHead(500);
-        res.end(String(err));
+        await sseTransport.handlePostMessage(req as unknown as IncomingMessage, res as unknown as ServerResponse<IncomingMessage>);
+        return;
       }
-    } else {
+
+      if (req.method === 'POST' && req.url === '/audit') {
+        let body = '';
+        for await (const chunk of req) {
+          body += chunk;
+        }
+        const parsed = JSON.parse(body || '{}');
+        const url = parsed.url as string | undefined;
+        if (!url) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing url' }));
+          return;
+        }
+        try {
+          const result = await mcp.runAuditViaTool({ url, categories: parsed.categories, formFactor: parsed.formFactor });
+          let fix = null;
+          if (result && result.lhr) {
+            fix = await autoFixFromReport({ lhr: result.lhr, report: JSON.stringify(result.report) });
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ summary: result.summary, fix, error: result.error }));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: String(err) }));
+        }
+        return;
+      }
+
+      // fallback
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ message: 'MCP Optimizer running — POST /audit { "url": "https://..." }' }));
+    } catch (outerErr: any) {
+      // ensure no plain-text stdout noise
+      try {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(outerErr) }));
+      } catch (_) {
+        // ignore
+      }
     }
-  };
-  const server = http.createServer(requestHandler);
+  });
+
   return new Promise((resolve, reject) => {
-    server.listen(port, () => {
-      // Do not print non-JSON to STDIO when running as MCP server
-      resolve();
-    });
+    server.listen(port, () => resolve());
     server.on('error', reject);
   });
 }
