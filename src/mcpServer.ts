@@ -76,9 +76,19 @@ export class LighthouseMcpServer {
             accessibility: accessibility !== null ? Math.round(accessibility * 100) : undefined
           };
           // 返回所有信息，便于 HTTP 路由复用
-          return { summary, lhr, report: JSON.parse(reportJson) };
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(summary, null, 2) },
+              { type: "text", text: JSON.stringify(lhr, null, 2) },
+              { type: "text", text: JSON.stringify(JSON.parse(reportJson), null, 2) }
+            ]
+          };
         } catch (error) {
-          return { error: `Lighthouse audit failed: ${error}` };
+          return {
+            content: [
+              { type: "text", text: `Lighthouse audit failed: ${error}` }
+            ]
+          };
         }
       }
     );
@@ -91,9 +101,17 @@ export class LighthouseMcpServer {
       async ({ reportId }) => {
         const record = this.reports.get(reportId);
         if (!record) {
-          return { error: `Report not found: ${reportId}` };
+          return {
+            content: [
+              { type: "text", text: `Report not found: ${reportId}` }
+            ]
+          };
         }
-        return { report: record.report };
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(record.report, null, 2) }
+          ]
+        };
       }
     );
   }
@@ -146,14 +164,14 @@ export async function startMcpServer(): Promise<void> {
         res.end(String(err));
       }
     } else {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('MCP Optimizer running — POST /audit { "url": "https://..." }');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ message: 'MCP Optimizer running — POST /audit { "url": "https://..." }' }));
     }
   };
   const server = http.createServer(requestHandler);
   return new Promise((resolve, reject) => {
     server.listen(port, () => {
-      console.log(`MCP Optimizer HTTP server listening on port ${port}`);
+      // Do not print non-JSON to STDIO when running as MCP server
       resolve();
     });
     server.on('error', reject);
