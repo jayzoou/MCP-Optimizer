@@ -80,12 +80,11 @@ export class LighthouseMcpServer {
             performance: perf !== null ? Math.round(perf * 100) : undefined,
             accessibility: accessibility !== null ? Math.round(accessibility * 100) : undefined
           };
-          // 返回所有信息，便于 HTTP 路由复用
+          // 返回精简信息：只返回 summary 与 reportId，完整报告保存在服务器以便按需获取
           return {
             content: [
               { type: "text", text: JSON.stringify(summary, null, 2) },
-              { type: "text", text: JSON.stringify(lhr, null, 2) },
-              { type: "text", text: JSON.stringify(reportObj, null, 2) }
+              { type: "text", text: `reportId:${id}` }
             ]
           };
         } catch (error) {
@@ -150,12 +149,12 @@ export class LighthouseMcpServer {
             performance: perf !== null ? Math.round(perf * 100) : undefined,
             accessibility: accessibility !== null ? Math.round(accessibility * 100) : undefined
           };
+          const fixAvailable = !!fix;
           return {
             content: [
               { type: "text", text: JSON.stringify(summary, null, 2) },
-              { type: "text", text: JSON.stringify(result.lhr || {}, null, 2) },
-              { type: "text", text: JSON.stringify(result.report || {}, null, 2) },
-              { type: "text", text: JSON.stringify({ fix }, null, 2) }
+              { type: "text", text: `reportId:${result.id}` },
+              { type: "text", text: JSON.stringify({ fixAvailable }, null, 2) }
             ]
           };
         } catch (err: any) {

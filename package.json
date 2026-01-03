@@ -1,6 +1,6 @@
 {
   "name": "mcp-optimizer",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "An MCP server that runs Lighthouse audits and enables LLMs to automatically optimize your code.",
   "main": "dist/index.js",
   "bin": {
