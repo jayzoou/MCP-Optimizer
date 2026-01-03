@@ -3,6 +3,7 @@ import { z } from "zod";
 import { runLighthouseAudit } from "./runner/lighthouseRunner";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as http from 'http';
 import { IncomingMessage, ServerResponse } from 'http';
 import { autoFixFromReport } from './fix/fixer';
@@ -192,9 +193,69 @@ export default LighthouseMcpServer;
 
 export async function startMcpServer(): Promise<void> {
   // Run HTTP/SSE server
-  const port = Number(process.env.PORT || process.env.AUDIT_PORT || 5000);
+  // Prefer explicit environment variables, but also allow parsing CLI args
+  // (e.g. when launched directly without the lightweight `bin` wrapper).
+  let portEnv = process.env.PORT || process.env.AUDIT_PORT;
+  if (!portEnv) {
+    const args = process.argv.slice(2);
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a.includes('=') && !a.startsWith('--')) {
+        const [k, v] = a.split('=', 2);
+        if ((k === 'PORT' || k === 'AUDIT_PORT') && v !== undefined) {
+          portEnv = v;
+          break;
+        }
+      }
+      if (a.startsWith('--port=')) {
+        portEnv = a.split('=')[1];
+        break;
+      } else if (a === '--port' && args[i + 1]) {
+        portEnv = args[i + 1];
+        break;
+      } else if (a.startsWith('--audit-port=')) {
+        portEnv = a.split('=')[1];
+        break;
+      } else if (a === '--audit-port' && args[i + 1]) {
+        portEnv = args[i + 1];
+        break;
+      }
+    }
+  }
+
+  const port = Number(portEnv || 5000);
   const mcp = new LighthouseMcpServer();
   let sseTransport: SSEServerTransport | null = null;
+  let stdioTransport: StdioServerTransport | null = null;
+  // If process stdin/stdout appear to be non-TTY pipes, assume we're being
+  // launched as a stdio child by an MCP host and use the stdio transport.
+  const shouldUseStdio = (process.stdin && !process.stdin.isTTY) && (process.stdout && !process.stdout.isTTY);
+  if (shouldUseStdio) {
+    // Redirect console output to stderr to avoid corrupting the JSON stdio protocol
+    const _orig = { log: console.log, info: console.info, warn: console.warn };
+    console.log = (...args: any[]) => { process.stderr.write(args.map(String).join(' ') + '\n'); };
+    console.info = console.log;
+    console.warn = console.log;
+    try {
+      stdioTransport = new StdioServerTransport(process.stdin, process.stdout);
+      await mcp.connect(stdioTransport as unknown as Transport);
+      console.error('Stdio: connected to parent process over stdio');
+      // When running over stdio we do not start the HTTP server; stay alive
+      // and let the parent coordinate messages. Return a promise that
+      // resolves when the transport closes.
+      return new Promise((resolve, reject) => {
+        stdioTransport!.onclose = () => resolve();
+        stdioTransport!.onerror = (err: any) => reject(err);
+      });
+    } catch (err) {
+      console.error('Stdio: failed to start transport, falling back to HTTP:', err);
+      stdioTransport = null;
+      // restore console in case we fall back to HTTP server mode
+      console.log = _orig.log;
+      console.info = _orig.info;
+      console.warn = _orig.warn;
+    }
+  }
   const pendingPosts: Array<{ body: string; url: string | undefined; headers: any }> = [];
 
   const { Readable, Writable } = await (async () => {

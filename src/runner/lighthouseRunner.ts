@@ -31,7 +31,9 @@ export async function runLighthouseAudit(
     const cmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
     const reportJson: string = await new Promise((resolve, reject) => {
-      execFile(cmd, args, { maxBuffer: 10 * 1024 * 1024 }, (err: any, stdout: string, stderr: string) => {
+      // Use a shell on Windows to ensure .cmd/.bat wrappers are executed
+      // correctly (avoids spawn EINVAL in some environments).
+      execFile(cmd, args, { maxBuffer: 10 * 1024 * 1024, shell: true, env: process.env }, (err: any, stdout: string, stderr: string) => {
         if (err) {
           const message = stderr || (err && err.message) || String(err);
           return reject(new Error(message));

@@ -26,6 +26,21 @@ curl -X POST http://localhost:3000/audit -H "Content-Type: application/json" -d 
 ```
 
 Notes
-- `src/runner/lighthouseRunner.ts` — runs Lighthouse via `chrome-launcher` and returns the LHR.
-- `src/fix/fixer.ts` — placeholder to convert LHR into actionable fixes; integrate LLM (e.g., via `@modelcontextprotocol/sdk`) here.
+This section provides an example of launching via an MCP host (stdio).
+
+If you want to configure an MCP host to spawn the optimizer via `npx`, add a server entry like the following to your host config:
+
+```json
+{
+	"mcpServers": {
+		"mcp-optimizer": {
+			"command": "npx",
+			"args": ["-y", "mcp-optimizer@0.0.6-alpha.1", "--","--port", "5000"]
+		}
+	}
+}
+```
+
+This will instruct the host to spawn `npx -y mcp-optimizer@0.0.6-alpha.1 -- --port 5000` and communicate with the child over stdio.
+
 
