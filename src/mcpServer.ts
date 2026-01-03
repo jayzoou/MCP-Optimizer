@@ -195,26 +195,96 @@ export async function startMcpServer(): Promise<void> {
   const port = Number(process.env.PORT || process.env.AUDIT_PORT || 5000);
   const mcp = new LighthouseMcpServer();
   let sseTransport: SSEServerTransport | null = null;
+  const pendingPosts: Array<{ body: string; url: string | undefined; headers: any }> = [];
+
+  const { Readable, Writable } = await (async () => {
+    const mod = await import('stream');
+    return { Readable: mod.Readable, Writable: mod.Writable };
+  })();
+
+  function makeMockReq(body: string, url?: string, headers?: any) {
+    const r = new Readable({ read() { this.push(body); this.push(null); } }) as any;
+    r.method = 'POST';
+    r.url = url || '/sse';
+    r.headers = headers || { 'content-type': 'application/json' };
+    return r as IncomingMessage;
+  }
+
+  function makeMockRes() {
+    const w = new Writable({ write(chunk, _enc, cb) { cb(); } }) as any;
+    w.writeHead = (status: number, headers?: any) => { w.statusCode = status; w._headers = headers; };
+    w.end = (data?: any) => { if (data) { try { /* consume */ } catch (_) {} } };
+    return w as unknown as ServerResponse<IncomingMessage>;
+  }
 
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url && req.url.startsWith('/sse')) {
-        // SSE handshake: create transport and connect
+        // SSE handshake: set headers and create transport
+        // Ensure we send proper SSE headers so clients don't fallback to polling.
         // Register the transport using '/sse' as the message POST path
-        // because some clients post messages back to the same '/sse' URL.
         sseTransport = new SSEServerTransport('/sse', res as unknown as ServerResponse<IncomingMessage>);
-        await mcp.connect(sseTransport);
+        try {
+          await mcp.connect(sseTransport);
+          console.info('SSE: new connection established');
+        } catch (err) {
+          console.error('SSE: failed to start transport:', err);
+          // Ensure client receives an error
+          try {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'failed to start sse transport' }));
+          } catch (_) { }
+          return;
+        }
+        // replay any pending POSTs that arrived before the GET
+        if (pendingPosts.length > 0) {
+          console.info(`SSE: replaying ${pendingPosts.length} pending POST(s)`);
+          for (const p of pendingPosts.splice(0)) {
+            try {
+              const mockReq = makeMockReq(p.body, p.url, p.headers);
+              const mockRes = makeMockRes();
+              // don't await to avoid blocking the handshake
+              sseTransport.handlePostMessage(mockReq as unknown as IncomingMessage, mockRes as unknown as ServerResponse<IncomingMessage>).catch((err: any) => {
+                console.error('SSE: replay handlePostMessage failed:', err);
+              });
+            } catch (err) {
+              console.error('SSE: failed to replay pending POST:', err);
+            }
+          }
+        }
         return;
       }
 
       if (req.method === 'POST' && req.url && (req.url === '/messages' || req.url.startsWith('/sse'))) {
+        console.info(`SSE: received POST to ${req.url}`);
         if (!sseTransport) {
-          res.writeHead(400);
-          res.end();
+          // Buffer the POST body so it can be processed once the GET arrives.
+          try {
+            let body = '';
+            for await (const chunk of req) {
+              body += chunk;
+            }
+            console.info('SSE: POST received before GET; buffering');
+            pendingPosts.push({ body, url: req.url, headers: req.headers });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+            return;
+          } catch (e) {
+            console.error('SSE: error reading POST body before GET:', e);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: String(e) }));
+            return;
+          }
+        }
+        try {
+          await sseTransport.handlePostMessage(req as unknown as IncomingMessage, res as unknown as ServerResponse<IncomingMessage>);
+          return;
+        } catch (err) {
+          console.error('SSE: handlePostMessage failed:', err);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: String(err) }));
           return;
         }
-        await sseTransport.handlePostMessage(req as unknown as IncomingMessage, res as unknown as ServerResponse<IncomingMessage>);
-        return;
       }
 
       if (req.method === 'POST' && req.url === '/audit') {
