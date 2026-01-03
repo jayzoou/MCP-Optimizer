@@ -30,13 +30,14 @@ export class LighthouseMcpServer {
     const runnerResult = await runLighthouseAudit(url, opts);
     const reportJson = runnerResult.report;
     const lhr = runnerResult.lhr;
+    const reportObj = typeof reportJson === 'string' ? JSON.parse(reportJson) : reportJson;
 
     const record = {
       id,
       url,
       fetchedAt: new Date().toISOString(),
       lhr,
-      report: JSON.parse(reportJson)
+      report: reportObj
     };
 
     this.reports.set(id, record);
@@ -61,12 +62,13 @@ export class LighthouseMcpServer {
           const runnerResult = await runLighthouseAudit(url, opts);
           const reportJson = runnerResult.report;
           const lhr = runnerResult.lhr;
+          const reportObj = typeof reportJson === 'string' ? JSON.parse(reportJson) : reportJson;
           this.reports.set(id, {
             id,
             url,
             fetchedAt: new Date().toISOString(),
             lhr,
-            report: JSON.parse(reportJson)
+            report: reportObj
           });
           const perf = lhr.categories?.performance?.score ?? null;
           const accessibility = lhr.categories?.accessibility?.score ?? null;
@@ -82,7 +84,7 @@ export class LighthouseMcpServer {
             content: [
               { type: "text", text: JSON.stringify(summary, null, 2) },
               { type: "text", text: JSON.stringify(lhr, null, 2) },
-              { type: "text", text: JSON.stringify(JSON.parse(reportJson), null, 2) }
+              { type: "text", text: JSON.stringify(reportObj, null, 2) }
             ]
           };
         } catch (error) {
@@ -114,6 +116,50 @@ export class LighthouseMcpServer {
             { type: "text", text: JSON.stringify(record.report, null, 2) }
           ]
         };
+      }
+    );
+
+    // 新增：从用户 Prompt 中识别 URL 并自动运行 Lighthouse 审计
+    this.server.tool(
+      "lighthouse_analyze_prompt",
+      "Scan a text prompt for a URL, run Lighthouse, and return a summary",
+      {
+        prompt: z.string().describe("A text prompt that may contain a URL to analyze")
+      },
+      async ({ prompt }) => {
+        try {
+          const urlMatch = prompt.match(/https?:\/\/[^\s"'<>]+/i);
+          if (!urlMatch) {
+            return {
+              content: [{ type: "text", text: "No URL found in prompt." }]
+            };
+          }
+          const url = urlMatch[0];
+          const result = await this.runAuditViaTool({ url });
+          let fix = null;
+          if (result && result.lhr) {
+            fix = await autoFixFromReport({ lhr: result.lhr, report: JSON.stringify(result.report) });
+          }
+          const perf = result.lhr?.categories?.performance?.score ?? null;
+          const accessibility = result.lhr?.categories?.accessibility?.score ?? null;
+          const summary = {
+            reportId: result.id,
+            url: result.url,
+            fetchedAt: result.fetchedAt,
+            performance: perf !== null ? Math.round(perf * 100) : undefined,
+            accessibility: accessibility !== null ? Math.round(accessibility * 100) : undefined
+          };
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(summary, null, 2) },
+              { type: "text", text: JSON.stringify(result.lhr || {}, null, 2) },
+              { type: "text", text: JSON.stringify(result.report || {}, null, 2) },
+              { type: "text", text: JSON.stringify({ fix }, null, 2) }
+            ]
+          };
+        } catch (err: any) {
+          return { content: [{ type: "text", text: `Error analyzing prompt: ${String(err)}` }] };
+        }
       }
     );
   }
@@ -152,16 +198,17 @@ export async function startMcpServer(): Promise<void> {
 
   const server = http.createServer(async (req, res) => {
     try {
-      if (req.method === 'GET' && req.url === '/sse') {
+      if (req.method === 'GET' && req.url && req.url.startsWith('/sse')) {
         // SSE handshake: create transport and connect
-        sseTransport = new SSEServerTransport('/messages', res as unknown as ServerResponse<IncomingMessage>);
+        // Register the transport using '/sse' as the message POST path
+        // because some clients post messages back to the same '/sse' URL.
+        sseTransport = new SSEServerTransport('/sse', res as unknown as ServerResponse<IncomingMessage>);
         await mcp.connect(sseTransport);
         return;
       }
 
-      if (req.method === 'POST' && req.url === '/messages') {
+      if (req.method === 'POST' && req.url && (req.url === '/messages' || req.url.startsWith('/sse'))) {
         if (!sseTransport) {
-          // @ts-ignore
           res.writeHead(400);
           res.end();
           return;
