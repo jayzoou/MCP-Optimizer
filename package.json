@@ -1,6 +1,6 @@
 {
   "name": "mcp-optimizer",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "An MCP server that runs Lighthouse audits and enables LLMs to automatically optimize your code.",
   "main": "dist/index.js",
   "bin": {
@@ -17,7 +17,13 @@
     "url": "git+https://github.com/jayzoou/MCP-Optimizer.git"
   },
   "keywords": [
-    "mcp"
+    "mcp",
+    "model-context-protocol",
+    "optimizer",
+    "lighthouse",
+    "llm",
+    "automation",
+    "code-optimization"
   ],
   "author": "",
   "license": "MIT",

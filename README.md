@@ -12,20 +12,32 @@ If you want to configure an MCP host to spawn the optimizer via `npx`, add a ser
 	"mcpServers": {
 		"mcp-optimizer": {
 			"command": "npx",
-			"args": ["-y", "mcp-optimizer@latest", "--","--port", "5000"]
+			"args": ["-y", "mcp-optimizer", "--","--port", "5000"]
 		}
 	}
 }
 ```
 
-This will instruct the host to spawn `npx -y mcp-optimizer@latest -- --port 5000` and communicate with the child over stdio.
+This will instruct the host to spawn `npx -y mcp-optimizer -- --port 5000` and communicate with the child over stdio.
+
+Or, if your MCP host can connect to a running optimizer over an SSE endpoint, configure the server with a URL instead:
+
+```json
+{
+	"mcpServers": {
+		"mcp-optimizer": {
+			"url": "https://localhost:5000/sse"
+		}
+	}
+}
+```
 
 ## Quick start
 
 1. Install runtime dependencies:
 
 ```bash
-npm install lighthouse chrome-launcher
+npm install
 ```
 
 2. Start the server (after building or in dev):
@@ -40,7 +52,7 @@ npm run dev
 3. Run an audit:
 
 ```bash
-curl -X POST http://localhost:3000/audit -H "Content-Type: application/json" -d '{"url":"https://example.com"}'
+curl -X POST http://localhost:5000/audit -H "Content-Type: application/json" -d '{"url":"https://example.com"}'
 ```
 
 
